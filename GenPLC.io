@@ -1,232 +1,340 @@
-/* Include Libraries */
-#include <ESP8266WiFi.h> 
+/************************  Include Libraries  *******************/
+#include <WiFi.h>
+#include <WiFiClient.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <Update.h>
+
+#include <ArduinoOTA.h>
 #include <PubSubClient.h>
-#include <Servo.h>
 
-// constants won't change. They're used here to set pin numbers:
-const int MG995_PIN = 1;
-const int RIGHT_ENDSTOP_PIN = 2;     // right endstop gpio pin
-const int LEFT_ENDSTOP_PIN = 3;     // left endstop gpio pin
-const int FUEL_VALVE_PIN = 4;  // vuel valve gpio pin
-const int GEN_STATE_PIN = 5;  // Gen state pin
+#include <ESP32Servo.h>
 
-// variables will change:
-int RIGHT_ENDSTOP_STATE = 0;         // variable for reading the endstop status
-int LEFT_ENDSTOP_STATE = 0;         // variable for reading the endstop status
-int CLOCK_WISE = 0; // Turn servo clockwise
-int ANTI_CLOCKWISE = 180; // Turn Servo anticlocks
-int FUEL_VALVE_RELAY_STATE = 0;
 
-// create servo object to control a servo
+/************  Constants won't change. They're used here to set pin numbers  *******************/
+// PWM Pins
+#define Servo_PWM 2               // Servo Command INPUT Pin (PWM)
+// Input Pins
+const int GEN_STATE_PIN = 4;      // Gen state INPUT Pin
+const int FUEL_VALVE_PIN = 21;     // Fuel valve INPUT Pin  
+const int ENDSTOP_LEFT_PIN = 18;  // Left endstop INPUT Pin OpenChoke
+const int ENDSTOP_RIGHT_PIN = 32; // Right endstop INPUT Pin CloseChoke
+// Output Pins
+const int MG995_POWER_PIN = 13;    // Servo power OUTPUT Pin
+const int KEY_OFF_PIN = 25;       // Key OFF position OUTPUT Pin
+const int KEY_ON_PIN = 26;        // Key ON position  OUTPUT Pin
+const int KEY_START_PIN = 27;     // Key START position OUTPUT Pin
+
+/************************  Starter no of retries to use  *******************/
+const int RETRY = 1;
+
+/************************  Create Servo object to control a servo  *******************/
 Servo MG995;
 
-// Use onboard LED for convenience 
-#define LED (2)
-// Maximum received message length 
-#define MAX_MSG_LEN (128)
+/************************  variables will change  *******************/
+int ENDSTOP_LEFT_STATE = 0;     // variable for reading the endstop status
+int ENDSTOP_RIGHT_STATE = 0;    // variable for reading the endstop status
+int TURN_CLOCKWISE = 0;         // Turn servo clockwise
+int TURN_ANTI_CLOCKWISE = 180;  // Turn Servo anticlocks 
+int SERVO_STOP = 90;            // Stop Servo
 
-// Wifi configuration
-const char* ssid = "ID10T";
-const char* password = "F0rtr355!";
+/************************ Wifi Details/Settings  *******************/
+const char* host = "gen-esp32";       // Hostname
+const char* ssid = "PlumeMain";       // WiFI Name
+const char* password = "F0rtr355!!";  // WiFi Password
+IPAddress local_IP(192,168,88,116);   // Local Wifi IP
+IPAddress gateway(192,168,88,1);      // Router IP
+IPAddress subnet(255,255,255,0);      // Subnet
+IPAddress primaryDNS(192,168,88,1);        // DNS
+IPAddress secondaryDNS(8,8,8,8);
 
-// MQTT Configuration
-// if you have a hostname set for the MQTT server, you can use it here
-//const char *serverHostname = "M1.local";
-// otherwise you can use an IP address like this
-const IPAddress serverIPAddress(172, 16, 0, 4);  // MQQT server ip
-// the topic we want to use
-const char *topic = "generator/controller";
+/************************ MQTT Settings  *******************/
+const char* mqtt_USER = "mqtt-user";
+const char* mqtt_PASS = "mqtt-password";
+const char* mqttTopic = "/GEN/";      // MQTT topic
+IPAddress broker(192,168,88,240);   // Address of the MQTT broker
+#define CLIENT_ID "GenEsp"          // Client ID to send to the broker 
 
-WiFiClient espClient;
-PubSubClient client(espClient);
-
-
-void setup() 
-{
-  // put your setup code here, to run once:
-  // Configure serial port for debugging
-  Serial.begin(115200);
-
-  // LED pin as output
-  pinMode(LED, OUTPUT);      
-  digitalWrite(LED, HIGH);
-
-  // initialize the endstop pin as an input:
-  pinMode(LEFT_ENDSTOP_PIN, INPUT);
-
-  // attaches the servo on GIO to the servo object
-  MG995.attach(MG995_PIN);
-
-  // Initialise wifi connection - this will wait until connected
-  connectWifi();
-  // connect to MQTT server  
-  client.setServer(serverIPAddress, 1883);
-  client.setCallback(callback);
-
-}
-
-void loop() 
-{
-  // put your main code here, to run repeatedly:
-  if (!client.connected()) 
-  {
-      connectMQTT();
-  }
-  
-    // this is ESSENTIAL!
-    client.loop();
-    // idle
-    delay(500);
-}
-
-// connect to wifi
-void connectWifi() 
-{
-  delay(10);
-  // Connecting to a WiFi network
-  Serial.printf("\nConnecting to %s\n", ssid);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) 
-  {
-    delay(250);
-    Serial.print(".");
-  }
-  
-  Serial.println("");
-  Serial.print("WiFi connected on IP address ");
-  Serial.println(WiFi.localIP());
-}
-
-// connect to MQTT server
-void connectMQTT() 
-{
-  // Wait until we're connected
-  while (!client.connected()) 
-  {
-    // Create a random client ID
-    String clientId = "ESP8266-";
-    clientId += String(random(0xffff), HEX);
-    Serial.printf("MQTT connecting as client %s...\n", clientId.c_str());
-    // Attempt to connect
-    if (client.connect(clientId.c_str())) 
-    {
-      Serial.println("MQTT connected");
-      // Once connected, publish an announcement...
-      client.publish(topic, "hello from ESP8266");
-      // ... and resubscribe
-      client.subscribe(topic);
-    } else 
-    {
-      Serial.printf("MQTT failed, state %s, retrying...\n", client.state());
-      // Wait before retrying
-      delay(2500);
-    }
-  }
-}
-
-void callback(char* topic, byte* payload, unsigned int length) 
-{
-  // copy payload to a static string
-  static char message[MAX_MSG_LEN+1];
-  if (length > MAX_MSG_LEN) 
-  {
-    length = MAX_MSG_LEN;
-  }
-  
-  strncpy(message, (char *)payload, length);
-  message[length] = '\0';
-  
-  Serial.printf("topic %s, message received: %s\n", topic, message);
-  // get the gen state
-  int gen_state = getGenState();
-  
-  // decode message
-  if (strcmp(message, "low batt") == 0) 
-  {
-    setLedState(false);
-    if (gen_state == LOW)
-    {
-      // Start the gen process
-      startGen();
-    }
-    
-  }
-  else if (strcmp(message, "low batt") == 1)
-  {
-    // check if gen is stopped and check servo position
-    stopGen();
-  }
-}
-
-void setLedState(boolean state) 
-{
-  // LED logic is inverted, low means on
-  digitalWrite(LED, !state);
-}
-
+/************************ Gen Functions  *******************/
 void startGen()
 {
-  // Start the Gen process
-  // get the gen state
-  int gen_state = getGenState();
-  // check if servo is in home pos
-  // read the state of the right endstop value:
-  RIGHT_ENDSTOP_STATE = digitalRead(RIGHT_ENDSTOP_PIN);
+  /* Start the Gen process */
+  int counter = 0;
 
-  if (gen_state == LOW)
-  {
-    // check if the right endstop is pressed. If it is, the endstop State is HIGH:
-    if (RIGHT_ENDSTOP_STATE != HIGH) 
-    {
-      // if servo is not HIGH turn Servo clockwise:
-      MG995.write(CLOCK_WISE); // rotate servo untill endstop state is HIGH
+  // Open Fuel Valve
+  Serial.println("Opening Fuel valve");
+  digitalWrite(FUEL_VALVE_PIN, LOW);        // Switch Realay to N/O to turn on 12V
+
+  // Open the choke
+  Serial.println("Opening the choke....");
+  openChoke();
+
+  Serial.println("Key OFF Position on");
+  digitalWrite(KEY_OFF_PIN, LOW);          // Relay On
+  
+  Serial.println("Key ON Position on");
+  digitalWrite(KEY_ON_PIN, LOW);          // Relay On
+
+  delay(2000);
+  // If Gen is off
+  if (digitalRead(GEN_STATE_PIN) == HIGH) {
+    while (digitalRead(GEN_STATE_PIN) == HIGH && counter < RETRY) {  // While Gen is off try to start gen twice
+      Serial.println("Key START Position on for 2 seconds");
+      digitalWrite(KEY_START_PIN, LOW);       // Relay On
+      delay(1000);                            // hold for 2 seconds
+      digitalWrite(KEY_START_PIN, HIGH);      // Relay Off
+      Serial.println("Key START Position off");
+      delay(1000);
+      counter ++;
     }
 
-    // Enable relay for Fuel
-    digitalWrite(FUEL_VALVE_PIN, HIGH);
+    delay(2000);
+    // If Gen is on
+    if (digitalRead(GEN_STATE_PIN) == LOW) {
+      closeChoke();
+      Serial.println("The Generator is running"); 
+    }
+    //else if gen did not start 
+    else {
+        // Safety Turn all off
+        Serial.print("Closing Fuel valve - off: ");
+        digitalWrite(FUEL_VALVE_PIN, HIGH);        // Switch Realay to N/C to turn off 12V
 
-    // Start the ignition
-    // turn key to start pos
-    // if gen state does not change try again to start the gen only try twice
-    
-  }
+        Serial.println("Key OFF Position off");
+        digitalWrite(KEY_OFF_PIN, HIGH);          // Relay Off
+  
+        Serial.println("Key ON Position off");
+        digitalWrite(KEY_ON_PIN, HIGH);          // Relay Off
+        closeChoke();
+        Serial.println("Generator could not start pls check.");
+      }
+  } 
   
 }
 
+/************************ Gen Functions  *******************/
 void stopGen()
 {
-  // Start the gen stop process
+  /* Start the gen stop process */
 
-  // get the gen state
-  int gen_state = getGenState();
-
-  if (gen_state == HIGH)
+  if (digitalRead(GEN_STATE_PIN) == LOW)    // Gen is running
   {
-    // Disable relay for Fuel
-    digitalWrite(FUEL_VALVE_PIN, LOW);
+     Serial.print("Closing Fuel valve - off: ");
+     digitalWrite(FUEL_VALVE_PIN, HIGH);        // Switch Realay to N/C to turn off 12V
 
-    // turn key to off pos and then back to on
+     Serial.println("Key OFF Position off");
+     digitalWrite(KEY_OFF_PIN, HIGH);          // Relay Off
+  
+     Serial.println("Key ON Position off");
+     digitalWrite(KEY_ON_PIN, HIGH);          // Relay Off
+     //closeChoke();
     
-    // Move choke back to home pos
-    // read the state of the right endstop value:
-    LEFT_ENDSTOP_STATE = digitalRead(LEFT_ENDSTOP_PIN);
-
-    // check if the right endstop is pressed. If it is, the endstop State is HIGH:
-    if (LEFT_ENDSTOP_STATE != HIGH) 
+  } else
     {
-      // if servo is not HIGH turn Servo clockwise:
-      MG995.write(ANTI_CLOCKWISE); // rotate servo untill endstop state is HIGH
+      Serial.print("Closing Fuel valve - off: ");
+      digitalWrite(FUEL_VALVE_PIN, HIGH);        // Switch Realay to N/C to turn off 12V
+
+      Serial.println("Key OFF Position off");
+      digitalWrite(KEY_OFF_PIN, HIGH);          // Relay Off
+  
+      Serial.println("Key ON Position off");
+      digitalWrite(KEY_ON_PIN, HIGH);          // Relay Off
+      //closeChoke();
+    }
+}
+
+/************************ Choke Functions  *******************/
+void openChoke()
+{
+  /* Turns the sevo clockwise to open position */
+  
+  digitalWrite(MG995_POWER_PIN, LOW);  //Power the servo
+  Serial.println("Powering on the servo, and turning untill endstop reached.");
+  
+  MG995.attach(Servo_PWM);    // Attach to servo pin (PWM)
+
+  while (digitalRead(ENDSTOP_LEFT_PIN) == HIGH) {   // Endstop not activated
+    MG995.write(TURN_ANTI_CLOCKWISE);
+    //Serial.println("Opening - Turning servo");
+  }
+
+  MG995.write(SERVO_STOP);
+  digitalWrite(MG995_POWER_PIN, HIGH);      // Power off servo
+  Serial.println("Choke is open, Servo Powering off.");  
+}
+
+/************************ Choke Functions  *******************/
+void closeChoke()
+{
+  /* Turns the servo anti clockwise to the closed position */
+
+  digitalWrite(MG995_POWER_PIN, LOW);  // Power the servo
+  Serial.println("Powering on the servo, and turning untill endstop reached.");
+  MG995.attach(Servo_PWM);
+  
+  while (digitalRead(ENDSTOP_RIGHT_PIN) == HIGH) {    // Endstop not activated
+    MG995.write(TURN_CLOCKWISE);
+    //Serial.println("Closing - Turning servo");
+  }
+
+  MG995.write(SERVO_STOP);
+  digitalWrite(MG995_POWER_PIN, HIGH);  // Turn Servo power off
+  Serial.println("Choke is closed, Servo Powering off servo.");  
+}
+
+/************************  MQTT Callback Function to process messages *******************/
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i=0;i<length;i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  // Examine only the first character of the message
+  if(payload[0] == 49) {               // Message "1" in ASCII (turn outputs ON)
+    //digitalWrite(ledPin, HIGH);      // LED is active-low, so this turns it on
+    //digitalWrite(relayPin, HIGH);
+    startGen();                        // Call Start Gen Function
+  } else if(payload[0] == 48) {        // Message "0" in ASCII (turn outputs OFF)
+    //digitalWrite(ledPin, LOW);       // LED is active-low, so this turns it off
+    //digitalWrite(relayPin, LOW);
+    stopGen();  // Call Stop gen Function
+  } else {
+    Serial.println("Unknown value");
+  }
+ 
+}
+
+WiFiClient wificlient;
+PubSubClient client(wificlient);
+
+/************ Attempt connection to MQTT broker and subscribe to command topic ************/
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    //if (client.connect(CLIENT_ID)) {
+    if (client.connect(CLIENT_ID, mqtt_USER, mqtt_PASS)) {  
+      Serial.println("connected");
+      client.subscribe(mqttTopic);
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
     }
   }
-  
 }
 
-int getGenState()
-{
-  // get the gen state
-  int genstate = digitalRead(GEN_STATE_PIN);
+/************************  Default Setup run once Function  *******************/
+void setup(void) {
+  Serial.begin(115200);
+
+  /* Set up the outputs. LED is active-low */
   
-  return genstate; 
+  // Input Pins
+  pinMode(GEN_STATE_PIN, INPUT_PULLUP);
+  pinMode(ENDSTOP_LEFT_PIN, INPUT_PULLUP);
+  pinMode(ENDSTOP_RIGHT_PIN, INPUT_PULLUP);
+
+  // Output Pins
+  pinMode(MG995_POWER_PIN, OUTPUT);
+  pinMode(FUEL_VALVE_PIN, OUTPUT);
+  pinMode(KEY_OFF_PIN, OUTPUT);
+  pinMode(KEY_ON_PIN, OUTPUT);
+  pinMode(KEY_START_PIN, OUTPUT);
+    
+  //During Start all Relays should TURN OFF
+  digitalWrite(FUEL_VALVE_PIN, HIGH);
+  digitalWrite(MG995_POWER_PIN, HIGH);
+  digitalWrite(KEY_OFF_PIN, HIGH);
+  digitalWrite(KEY_ON_PIN, HIGH);
+  digitalWrite(KEY_START_PIN, HIGH);
+
+  Serial.println("Booting");
+  // Configures static IP address
+  if (!WiFi.config(local_IP, gateway, subnet, primaryDNS, secondaryDNS)) {
+    Serial.println("STA Failed to configure");
+  }
+
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+  Serial.println("WiFi begun");
+  
+  while (WiFi.waitForConnectResult() != WL_CONNECTED) {
+    Serial.println("Connection Failed! Rebooting...");
+    delay(5000);
+    ESP.restart();
+  }
+  Serial.println("Proceeding");
+
+  // MQTT
+  // Port defaults to 8266
+  // ArduinoOTA.setPort(8266);
+
+  // Hostname defaults to esp8266-[ChipID]
+  // ArduinoOTA.setHostname("myesp8266");
+
+  // No authentication by default
+  ArduinoOTA.setPassword((const char *)"730");
+ 
+  ArduinoOTA.onStart([]() {
+    Serial.println("Start");
+  });
+  ArduinoOTA.onEnd([]() {
+    Serial.println("\nEnd");
+  });
+  ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+    Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+  });
+  ArduinoOTA.onError([](ota_error_t error) {
+    Serial.printf("Error[%u]: ", error);
+    if      (error == OTA_AUTH_ERROR   ) Serial.println("Auth Failed");
+    else if (error == OTA_BEGIN_ERROR  ) Serial.println("Begin Failed");
+    else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+    else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+    else if (error == OTA_END_ERROR    ) Serial.println("End Failed");
+  });
+  ArduinoOTA.begin();
+  Serial.println("Ready");
+  Serial.print("IP address: ");
+  Serial.println(WiFi.localIP());
+ 
+  /* Prepare MQTT client */
+  client.setServer(broker, 1883);
+  client.setCallback(callback);
 }
 
+/************************  Main Loop Function  *******************/
+void loop(void) {
+  
+  ArduinoOTA.handle();
+  
+  if (WiFi.status() != WL_CONNECTED)
+  {
+    Serial.print("Connecting to ");
+    Serial.print(ssid);
+    Serial.println("...");
+ 
+    WiFi.begin(ssid, password);
 
+    if (WiFi.waitForConnectResult() != WL_CONNECTED)
+      return;
+    Serial.println("WiFi connected");
+  }
+
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!client.connected()) {
+      reconnect();
+    }
+  }
+ 
+  if (client.connected())
+  {
+    client.loop();
+  }
+}
