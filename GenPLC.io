@@ -46,6 +46,7 @@ void setup()
   // put your setup code here, to run once:
   // Configure serial port for debugging
   Serial.begin(115200);
+<<<<<<< HEAD
 
   // LED pin as output
   pinMode(LED, OUTPUT);      
@@ -54,6 +55,16 @@ void setup()
   // initialize the endstop pin as an input:
   pinMode(LEFT_ENDSTOP_PIN, INPUT);
 
+=======
+
+  // LED pin as output
+  pinMode(LED, OUTPUT);      
+  digitalWrite(LED, HIGH);
+
+  // initialize the endstop pin as an input:
+  pinMode(LEFT_ENDSTOP_PIN, INPUT);
+
+>>>>>>> 559e279da8f71209b3effc3c916066c3efddd402
   // attaches the servo on GIO to the servo object
   MG995.attach(MG995_PIN);
 
@@ -192,6 +203,7 @@ void startGen()
   }
   
 }
+<<<<<<< HEAD
 
 void stopGen()
 {
@@ -200,6 +212,16 @@ void stopGen()
   // get the gen state
   int gen_state = getGenState();
 
+=======
+
+void stopGen()
+{
+  // Start the gen stop process
+
+  // get the gen state
+  int gen_state = getGenState();
+
+>>>>>>> 559e279da8f71209b3effc3c916066c3efddd402
   if (gen_state == HIGH)
   {
     // Disable relay for Fuel
@@ -219,6 +241,17 @@ void stopGen()
     }
   }
   
+<<<<<<< HEAD
+=======
+}
+
+int getGenState()
+{
+  // get the gen state
+  int genstate = digitalRead(GEN_STATE_PIN);
+  
+  return genstate; 
+>>>>>>> 559e279da8f71209b3effc3c916066c3efddd402
 }
 
 int getGenState()
